@@ -22,6 +22,7 @@ executable adpasswd
   build-depends:       base >=4.6 && <4.8
                      , unix-compat >= 0.4.1.3
                      , app-settings >= 0.2.0.2
+                     , bytestring
                      , text
                      , LDAP
   -- hs-source-dirs:      

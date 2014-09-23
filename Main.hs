@@ -25,7 +25,7 @@ buildPath = concat . intersperse "," . map bp
     bp (SN x) = "sn="++x
 
 adServer :: Setting URL
-adServer = Setting "adServer" "ldaps://10.3.88.97:636"
+adServer = Setting "adServer" "ldaps://example.ad.server:636"
 
 userName :: Username -> Setting Username
 userName name = Setting "username" name
@@ -63,28 +63,54 @@ ldapConfig = do
     return (server, user)
 
 ldapPath' :: [PathPiece]
-ldapPath' = [OU "tenant", OU "WFM", DC "wfm", DC "cto", DC "voxeo", DC "net"]
+ldapPath' = [OU "Global", DC "aspect", DC "com"]
 ldapPath :: String
 ldapPath = buildPath ldapPath'
 
+userAttrs :: SearchAttributes
 userAttrs = LDAPAttrList ["sn", "givenName", "cn", "mail", "armID", "userPrincipalName"]
+
+findUser :: Username -> LDAP -> IO [LDAPEntry]
+findUser name con = ldapSearch con (Just ldapPath) LdapScopeSubtree (Just ("(&(objectClass=User)(sn=" ++ name ++ "))")) userAttrs True
 
 ldapPasswordChange :: Password -> LDAPMod
 ldapPasswordChange pass = LDAPMod LdapModReplace "UnicodePwd" [C.unpack . encodeUtf16LE $ pack pass]
 
-userDn :: String -> String
-userDn name = buildPath [SN name, OU "Global",DC "aspect",DC "com"]
+login :: LDAP -> Username -> IO ()
+login con user = do 
+    putStr $ "Enter current password for " ++ user ++ ": "
+    pass <- readLn
+    result <- try $ ldapSimpleBind con user pass
+    case result of
+        Right _ -> return ()
+        Left (x :: SomeException) -> do
+            putStrLn "Login failed, password or username wrong, try again (^c to cancel)."
+            login con user
+
+getNewPassword :: IO String
+getNewPassword = do
+    putStr $ "Enter new password: "
+    newPass <- readLn
+    putStr $ "Enter new password again: "
+    newPass2 <- readLn
+    if newPass /= newPass2 then do
+        putStrLn "Error, passwords don't match, try again."
+        getNewPassword
+    else
+        return newPass
 
 changePassword :: URL -> Username -> IO ()
 changePassword url user = do
     con <- ldapInitialize url
-    putStr $ "Enter current password for " ++ user ++ ": "
-    oldPass <- readStrLn
-    putStr $ "Enter new password: "
-    newPass <- readStrLn
-    ldapSimpleBind con user oldPass
-    ldapModify con (userDn user) [ldapPasswordChange newPass]
-
+    login con user
+    adUser <- findUser user con
+    case adUser of 
+        [] -> putStrLn $ "Unable to find a user with username of " ++ user
+        (x:[]) -> do
+            newPass <- getNewPassword
+            ldapModify con (ledn x) [ldapPasswordChange newPass]
+        (x:y:_) -> do
+            putStrLn $ "Multiple users found with username of " ++ user ++ ", unable to proceed"
 
 main :: IO ()
 main = do
