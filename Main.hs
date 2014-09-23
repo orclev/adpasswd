@@ -12,7 +12,7 @@ import Data.Text.Encoding (encodeUtf16LE)
 import System.IO (hFlush, stdin, hSetEcho, stdout, hGetLine, hSetBuffering, BufferMode (..), hPutStr, hPutStrLn)
 import qualified Data.ByteString.Char8 as C
 
-data PathPiece = OU String | DC String | SN String
+data PathPiece = OU String | DC String
 
 type Username = String
 type Password = String
@@ -23,10 +23,9 @@ buildPath = concat . intersperse "," . map bp
   where
     bp (OU x) = "ou="++x
     bp (DC x) = "DC="++x
-    bp (SN x) = "sn="++x
 
 adServer :: Setting URL
-adServer = Setting "adServer" "ldaps://example.ad.server:636"
+adServer = Setting "adServer" "ldaps://aspect.com:636"
 
 userName :: Username -> Setting Username
 userName name = Setting "username" name
@@ -67,9 +66,6 @@ ldapPath' :: [PathPiece]
 ldapPath' = [OU "Global", DC "aspect", DC "com"]
 ldapPath :: String
 ldapPath = buildPath ldapPath'
-
-userAttrs :: SearchAttributes
-userAttrs = LDAPAttrList ["sn", "givenName", "cn", "mail", "userPrincipalName"]
 
 stripDomain :: Username -> Username
 stripDomain name = takeWhile (/= '@') name
