@@ -9,6 +9,7 @@ import LDAP
 import Data.List (intersperse, concat)
 import Data.Text (pack)
 import Data.Text.Encoding (encodeUtf16LE)
+import System.IO (hFlush, stdin, hSetEcho, stdout, hGetLine, hSetBuffering, BufferMode (..), hPutStr, hPutStrLn)
 import qualified Data.ByteString.Char8 as C
 
 data PathPiece = OU String | DC String | SN String
@@ -68,36 +69,58 @@ ldapPath :: String
 ldapPath = buildPath ldapPath'
 
 userAttrs :: SearchAttributes
-userAttrs = LDAPAttrList ["sn", "givenName", "cn", "mail", "armID", "userPrincipalName"]
+userAttrs = LDAPAttrList ["sn", "givenName", "cn", "mail", "userPrincipalName"]
+
+stripDomain :: Username -> Username
+stripDomain name = takeWhile (/= '@') name
 
 findUser :: Username -> LDAP -> IO [LDAPEntry]
-findUser name con = ldapSearch con (Just ldapPath) LdapScopeSubtree (Just ("(&(objectClass=User)(sn=" ++ name ++ "))")) userAttrs True
+findUser name con = ldapSearch con (Just ldapPath) LdapScopeSubtree (Just ("(&(objectClass=User)(userPrincipalName=" 
+    ++ name ++ "))")) LDAPAllUserAttrs False
 
-ldapPasswordChange :: Password -> LDAPMod
-ldapPasswordChange pass = LDAPMod LdapModReplace "UnicodePwd" [C.unpack . encodeUtf16LE $ pack pass]
+ldapPasswordChange :: Password -> [LDAPMod]
+ldapPasswordChange pass =
+    [ LDAPMod LdapModDelete "unicodePwd" []
+    , LDAPMod LdapModAdd "unicodePwd" [C.unpack . encodeUtf16LE $ pack pass]
+    ]
 
 login :: LDAP -> Username -> IO ()
 login con user = do 
-    putStr $ "Enter current password for " ++ user ++ ": "
-    pass <- readLn
-    result <- try $ ldapSimpleBind con user pass
-    case result of
-        Right _ -> return ()
-        Left (x :: SomeException) -> do
-            putStrLn "Login failed, password or username wrong, try again (^c to cancel)."
-            login con user
+    pass <- secureRead $ "Enter current password for " ++ user ++ ": "
+    catchLDAP (ldapSimpleBind con user pass) $ \x -> do
+        putStrLn $ "Login failed: " ++ show x
+        putStrLn "Try again (^c to cancel)."
+        login con user
+
+secureRead :: String -> IO String
+secureRead prompt = do
+    hSetBuffering stdout NoBuffering
+    hPutStr stdout prompt
+    hFlush stdout
+    hSetEcho stdin False
+    line <- getLine
+    hPutStrLn stdout ""
+    hSetEcho stdin True
+    hSetBuffering stdout LineBuffering
+    return line
 
 getNewPassword :: IO String
 getNewPassword = do
-    putStr $ "Enter new password: "
-    newPass <- readLn
-    putStr $ "Enter new password again: "
-    newPass2 <- readLn
+    newPass <- secureRead "Enter new password: "
+    newPass2 <- secureRead "Enter new password again: "
     if newPass /= newPass2 then do
-        putStrLn "Error, passwords don't match, try again."
+        hPutStrLn stdout "Error, passwords don't match, try again."
         getNewPassword
     else
         return newPass
+
+setNewPassword :: LDAP -> String -> IO ()
+setNewPassword con dc = do
+    newPass <- getNewPassword
+    catchLDAP (ldapModify con dc (ldapPasswordChange ("\"" ++ newPass ++ "\""))) $ \x -> do
+        case code x of
+            LdapConstraintViolation -> putStrLn "Password does not meet complexity requirements, try again." >> setNewPassword con dc
+            _ -> putStrLn $ "Unknown error occured: " ++ show x
 
 changePassword :: URL -> Username -> IO ()
 changePassword url user = do
@@ -106,11 +129,8 @@ changePassword url user = do
     adUser <- findUser user con
     case adUser of 
         [] -> putStrLn $ "Unable to find a user with username of " ++ user
-        (x:[]) -> do
-            newPass <- getNewPassword
-            ldapModify con (ledn x) [ldapPasswordChange newPass]
-        (x:y:_) -> do
-            putStrLn $ "Multiple users found with username of " ++ user ++ ", unable to proceed"
+        (x:[]) -> setNewPassword con (ledn x)
+        (x:y:_) -> putStrLn $ "Multiple users found with username of " ++ user ++ ", unable to proceed"
 
 main :: IO ()
 main = do
