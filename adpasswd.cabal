@@ -17,7 +17,7 @@ cabal-version:       >=1.10
 
 executable adpasswd
   main-is:             Main.hs
-  ghc-options: -static -optl-static
+  ghc-options: -static
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.6 && <4.8
